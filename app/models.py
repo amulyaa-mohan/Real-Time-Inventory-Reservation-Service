@@ -15,7 +15,7 @@ PG_BIGINT_MAX = 2**63 - 1
 class ProductCreate(BaseModel):
     sku: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
-    total_qty: int = Field(ge=0, le=PG_INT_MAX)
+    total_qty: int = Field(strict=True, ge=0, le=PG_INT_MAX)
 
 
 class ProductOut(BaseModel):
@@ -29,8 +29,9 @@ class ProductOut(BaseModel):
 
 
 class ReservationCreate(BaseModel):
-    product_id: int = Field(ge=1, le=PG_BIGINT_MAX)
-    qty: int = Field(ge=1, le=PG_INT_MAX)
+    # strict: JSON must send a real integer; "2", 2.0 and true are rejected (422).
+    product_id: int = Field(strict=True, ge=1, le=PG_BIGINT_MAX)
+    qty: int = Field(strict=True, ge=1, le=PG_INT_MAX)
 
 
 class ReservationOut(BaseModel):

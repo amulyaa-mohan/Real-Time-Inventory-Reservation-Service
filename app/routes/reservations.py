@@ -12,6 +12,10 @@ from app.services import reservations as svc
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
 
+# Keys are indexed (UNIQUE) in Postgres; btree entries are capped at ~2.7KB, so an
+# unbounded key would fail inside the DB as a 500. Real keys are UUIDs (36 chars).
+MAX_IDEMPOTENCY_KEY_LENGTH = 255
+
 
 @router.post("", status_code=201, response_model=ReservationOut)
 async def create_reservation(
@@ -23,6 +27,12 @@ async def create_reservation(
 ):
     if not idempotency_key or not idempotency_key.strip():
         raise AppError(400, "MISSING_IDEMPOTENCY_KEY", "Idempotency-Key header is required")
+    if len(idempotency_key) > MAX_IDEMPOTENCY_KEY_LENGTH:
+        raise AppError(
+            400,
+            "INVALID_IDEMPOTENCY_KEY",
+            f"Idempotency-Key must be at most {MAX_IDEMPOTENCY_KEY_LENGTH} characters",
+        )
 
     reservation, replayed = await svc.reserve(engine, redis, body.product_id, body.qty, idempotency_key)
     if replayed:

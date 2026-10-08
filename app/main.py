@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
@@ -7,6 +8,8 @@ from app.config import settings
 from app.db import create_engine, init_schema
 from app.errors import register_error_handlers
 from app.routes import health, products, reservations
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 @asynccontextmanager

@@ -10,9 +10,9 @@ import random
 import uuid
 from datetime import timedelta
 
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app import idempotency

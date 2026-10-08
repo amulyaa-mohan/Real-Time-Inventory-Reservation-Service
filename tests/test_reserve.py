@@ -178,3 +178,20 @@ async def test_get_reservation_unknown_404(client):
     resp = await client.get(f"/reservations/{uuid.uuid4()}")
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def test_reserve_overlong_idempotency_key_400(client, make_product):
+    # Regression: a >2.7KB key used to hit Postgres' btree row limit and return 500.
+    product = await make_product()
+    resp = await reserve(client, product["id"], key="k" * 256)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_IDEMPOTENCY_KEY"
+    assert (await reserve(client, product["id"], key="k" * 255)).status_code == 201
+
+
+@pytest.mark.parametrize("qty", ["1", 1.0, True])
+async def test_reserve_non_integer_qty_422(client, make_product, qty):
+    product = await make_product()
+    resp = await reserve(client, product["id"], qty=qty)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"

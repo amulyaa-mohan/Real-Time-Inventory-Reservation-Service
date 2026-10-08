@@ -6,12 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.db import get_engine
 from app.errors import AppError, not_found
-from app.models import ProductCreate, ProductOut
+from app.models import PG_BIGINT_MAX, ProductCreate, ProductOut
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 # BIGSERIAL upper bound; larger ids are rejected with 422 before hitting the DB.
-ProductId = Annotated[int, Path(ge=1, le=2**63 - 1)]
+ProductId = Annotated[int, Path(ge=1, le=PG_BIGINT_MAX)]
 
 PRODUCT_COLUMNS = "id, sku, name, total_qty, available, version, updated_at"
 
