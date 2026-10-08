@@ -132,15 +132,24 @@ Redis on `:6379`. Configuration is via env vars. See [.env.example](.env.example
 
 Invalid values (e.g. `REAPER_BATCH_SIZE=0`) stop the app at startup with a clear error.
 
-A quick walk-through:
+A quick walk-through (bash). It reads the new ids from each response, so it works on
+any database:
 
 ```bash
-curl -X POST localhost:8000/products -H "Content-Type: application/json" \
-     -d '{"sku":"DEMO-1","name":"Demo","total_qty":5}'
-curl -X POST localhost:8000/reservations -H "Content-Type: application/json" \
-     -H "Idempotency-Key: 7d1c0a1e-demo" -d '{"product_id":1,"qty":2}'
-curl -X POST localhost:8000/reservations/<id>/confirm
-curl localhost:8000/products/1
+json_id() { python -c "import sys, json; print(json.load(sys.stdin)['id'])"; }
+
+# 1. create a product with 5 units (unique SKU, so the demo can be re-run)
+PRODUCT_ID=$(curl -s -X POST localhost:8000/products -H "Content-Type: application/json" \
+  -d "{\"sku\":\"DEMO-$RANDOM\",\"name\":\"Demo\",\"total_qty\":5}" | json_id)
+
+# 2. hold 2 of them (send the same Idempotency-Key again to see a 200 replay)
+KEY=$(python -c "import uuid; print(uuid.uuid4())")
+RES_ID=$(curl -s -X POST localhost:8000/reservations -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $KEY" -d "{\"product_id\":$PRODUCT_ID,\"qty\":2}" | json_id)
+
+# 3. confirm the hold, then look at the stock: available 3, version 1
+curl -s -X POST localhost:8000/reservations/$RES_ID/confirm; echo
+curl -s localhost:8000/products/$PRODUCT_ID; echo
 ```
 
 > **Windows PowerShell 5.1** mangles quotes passed to `curl.exe`. Put the JSON in a
@@ -193,40 +202,55 @@ docker compose up -d                           # back to the default 120s holds
 
 `seed.py` is re-runnable: it deletes only the old HOT-1 and its reservations. Locust
 counts 201 and 409 as success, counts 503 separately, and treats anything else as a
-failure. Per-status counts are saved to `loadtest/results_status_counts.json`.
-`verify.py` checks `/admin/invariants`, queries Postgres directly, and cross-checks that
-Locust's 201 count equals the reservation rows.
+failure. Each time a test starts, Locust re-reads the HOT-1 id written by `seed.py`, so
+you can re-seed while the web UI stays open. When a test stops, the per-status counts are
+saved to `loadtest/results_status_counts.json`. `verify.py` checks `/admin/invariants`,
+queries Postgres directly, and cross-checks that Locust's 201 count equals the
+reservation rows.
+
+For the charts, run Locust with its web UI instead of `--headless`:
+`locust -f loadtest/locustfile.py --host http://localhost:8000`. Then open
+http://localhost:8089 and set 200 users, ramp 50, and run time 30s (under *Advanced options*).
+
+> Don't restart or re-seed the stack while a load test is running. A test pointed at a
+> product that no longer exists only measures `404`s and connection errors.
 
 ### Results
 
-Run on a 24-thread Windows laptop, Docker Desktop, one uvicorn process:
+Two clean runs on a 24-thread Windows laptop, Docker Desktop, one uvicorn process,
+200 users, 30 s:
 
-| Metric | Value |
-|---|---|
-| Requests | 8,221 in 30 s (~300 req/s), **0 failures** |
-| `201` reserved | **50**, exactly the stock |
-| `409` out of stock | 8,017 |
-| `503` busy | 154 |
-| Latency | p50 530 ms · p95 1.1 s · p99 1.4 s · max 2.2 s |
-| `verify.py` | `HELD=50, available=0` → **INVARIANT OK** |
+| Metric | Web UI run (charts below) | Headless run |
+|---|---|---|
+| Requests | 9,580 (~317 req/s, ~340 at full load) | 8,221 (~300 req/s) |
+| Failures | **0** | **0** |
+| `201` reserved | **50**, exactly the stock | **50**, exactly the stock |
+| `409` + `503` | 9,530 in total | 8,017 + 154 |
+| Latency | p50 500 ms · p95 1.0 s · p99 1.3 s · max 2.5 s | p50 530 ms · p95 1.1 s · p99 1.4 s · max 2.2 s |
+| `verify.py` | `HELD=50, available=0` → **INVARIANT OK** | `HELD=50, available=0` → **INVARIANT OK** |
 
-Throughput and latency vary with what else the machine is doing. A later run from a
-fresh clone did 3,802 requests (p50 1.2 s, one `503`). The correctness results don't
-vary: every run sold **exactly 50** with **INVARIANT OK**.
+The web UI run's 201 count comes from `verify.py`, which found exactly 50 rows in
+Postgres. That run predates the separate per-status file, so its 409/503 split wasn't
+recorded.
 
-![Locust charts](docs/locust-charts.png)
+![Locust charts: requests per second, response times and users for the web UI run](docs/locust-charts.webp)
+
+The flat stretch at the start of each chart is the UI open before *Start* was pressed.
 
 **What the numbers show:**
 
-- **Correctness held under contention.** Over 8,000 requests chased 50 units. Exactly 50
-  were sold, nothing was oversold, and nothing was lost.
+- **Correctness held under contention.** In each run, thousands of requests chased 50
+  units. Exactly 50 were sold, nothing was oversold, and nothing was lost.
 - **The 503s are the hot-SKU retry storm.** In the first seconds, while stock remained,
   ~30 requests at a time read the same `version`. One wins each round and the rest retry.
   154 lost 5 rounds in a row and got `503 BUSY` + `Retry-After: 1`, even though stock was
   still available.
-- **The bottleneck was the API process, not the database.** During the run the API
-  container sat at ~100% of one CPU core, Postgres at ~25%, Redis at ~3%. The latency is
-  requests queueing for a single Python worker.
+- **The bottleneck was the API process, not the database.** During the headless run the
+  API container sat at ~100% of one CPU core, Postgres at ~25%, Redis at ~3%. The latency
+  is requests queueing for a single Python worker. Throughput halves (~126 req/s,
+  p50 1.2 s) when a second 200-user load test hits the same API at the same time, which
+  happened once by accident. Even then, both runs still sold exactly 50 with
+  **INVARIANT OK**.
 
 ---
 
