@@ -9,7 +9,9 @@ from app.db import create_engine, init_schema
 from app.errors import register_error_handlers
 from app.routes import health, products, reservations
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Libraries log at WARNING+; our own app.* loggers (reaper, retries) also at INFO.
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("app").setLevel(logging.INFO)
 
 
 @asynccontextmanager

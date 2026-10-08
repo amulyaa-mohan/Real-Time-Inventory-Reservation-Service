@@ -44,3 +44,13 @@ async def create_reservation(
 @router.get("/{reservation_id}", response_model=ReservationOut)
 async def get_reservation(reservation_id: UUID, engine: AsyncEngine = Depends(get_engine)):
     return await svc.get_reservation(engine, reservation_id)
+
+
+@router.post("/{reservation_id}/confirm", response_model=ReservationOut)
+async def confirm_reservation(reservation_id: UUID, engine: AsyncEngine = Depends(get_engine)):
+    return await svc.confirm(engine, reservation_id)
+
+
+@router.delete("/{reservation_id}", response_model=ReservationOut)
+async def release_reservation(reservation_id: UUID, engine: AsyncEngine = Depends(get_engine)):
+    return await svc.release(engine, reservation_id)

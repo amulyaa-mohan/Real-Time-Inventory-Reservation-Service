@@ -5,6 +5,9 @@ using the same database as the dev API. Every test starts from empty tables
 and an empty Redis DB.
 """
 
+import uuid
+from datetime import timedelta
+
 import httpx
 import pytest
 from sqlalchemy import text
@@ -56,6 +59,35 @@ async def assert_invariant(engine, product_id: int) -> dict:
     assert snap["available"] >= 0, snap
     assert snap["available"] + snap["reserved"] == snap["total_qty"], snap
     return snap
+
+
+async def insert_hold(
+    engine, product_id: int, qty: int = 1, status: str = "HELD", expires_in_seconds: float = 120
+) -> str:
+    """Insert a reservation directly in the DB (e.g. with a past expires_at), keeping the
+    stock invariant: HELD/CONFIRMED take stock from `available`, RELEASED/EXPIRED don't."""
+    reservation_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        if status in ("HELD", "CONFIRMED"):
+            await conn.execute(
+                text("UPDATE products SET available = available - :qty, version = version + 1 WHERE id = :id"),
+                {"qty": qty, "id": product_id},
+            )
+        await conn.execute(
+            text("""
+                INSERT INTO reservations (id, product_id, qty, status, idempotency_key, request_hash, expires_at)
+                VALUES (:id, :pid, :qty, :status, :key, 'test', now() + CAST(:ttl AS interval))
+            """),
+            {
+                "id": reservation_id,
+                "pid": product_id,
+                "qty": qty,
+                "status": status,
+                "key": f"test-{reservation_id}",
+                "ttl": timedelta(seconds=expires_in_seconds),
+            },
+        )
+    return str(reservation_id)
 
 
 @pytest.fixture

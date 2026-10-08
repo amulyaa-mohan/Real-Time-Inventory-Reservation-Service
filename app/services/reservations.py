@@ -1,6 +1,6 @@
-"""Reserve logic (BUILDBOOK 7.1): optimistic locking with bounded, jittered retries.
+"""Reservation logic. Reserve (BUILDBOOK 7.1): optimistic locking with bounded, jittered retries.
 
-Step 1 (Redis fast path) lives in app/idempotency.py; confirm/release are added in Phase 4.
+Step 1 (Redis fast path) lives in app/idempotency.py. Confirm/release: BUILDBOOK 7.2/7.3.
 """
 
 import asyncio
@@ -198,3 +198,72 @@ async def get_reservation(engine: AsyncEngine, reservation_id: uuid.UUID) -> dic
     if row is None:
         raise not_found("reservation")
     return dict(row)
+
+
+def _invalid_state(status: str, action: str) -> AppError:
+    return AppError(409, "INVALID_STATE", f"cannot {action} a reservation that is {status}")
+
+
+async def confirm(engine: AsyncEngine, reservation_id: uuid.UUID) -> dict:
+    """HELD -> CONFIRMED (BUILDBOOK 7.2). Stock was already taken at reserve time."""
+    async with engine.begin() as conn:
+        # Conditional on HELD *and* not yet expired: a hold past expires_at can't be
+        # confirmed even if the reaper hasn't marked it EXPIRED yet.
+        row = (
+            await conn.execute(
+                text(f"""
+                    UPDATE reservations
+                       SET status = 'CONFIRMED', updated_at = now()
+                     WHERE id = :id AND status = 'HELD' AND expires_at > now()
+                    RETURNING {RESERVATION_COLUMNS}
+                """),
+                {"id": reservation_id},
+            )
+        ).mappings().first()
+    if row:
+        return dict(row)
+
+    # Nothing updated: explain why from the current state.
+    current = await get_reservation(engine, reservation_id)  # 404 if missing
+    status = current["status"]
+    if status == "CONFIRMED":
+        return current  # idempotent
+    if status == "RELEASED":
+        raise _invalid_state(status, "confirm")
+    # EXPIRED, or still HELD but past expires_at (reaper hasn't run yet).
+    raise AppError(410, "EXPIRED", "the hold has expired")
+
+
+async def release(engine: AsyncEngine, reservation_id: uuid.UUID) -> dict:
+    """HELD -> RELEASED and return the stock, in one transaction (BUILDBOOK 7.3)."""
+    async with engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(f"""
+                    UPDATE reservations
+                       SET status = 'RELEASED', updated_at = now()
+                     WHERE id = :id AND status = 'HELD'
+                    RETURNING {RESERVATION_COLUMNS}
+                """),
+                {"id": reservation_id},
+            )
+        ).mappings().first()
+        if row:
+            # Only the request that flipped HELD -> RELEASED returns stock, so a
+            # double release (or release racing the reaper) can't return it twice.
+            await conn.execute(
+                text("""
+                    UPDATE products
+                       SET available = available + :qty,
+                           version = version + 1,
+                           updated_at = now()
+                     WHERE id = :product_id
+                """),
+                {"qty": row["qty"], "product_id": row["product_id"]},
+            )
+            return dict(row)
+
+    current = await get_reservation(engine, reservation_id)  # 404 if missing
+    if current["status"] == "RELEASED":
+        return current  # idempotent
+    raise _invalid_state(current["status"], "release")  # CONFIRMED or EXPIRED
