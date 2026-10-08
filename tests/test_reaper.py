@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import text
 
 from app.config import settings
+import app.main as main_module
 from app.main import app, lifespan
 from app.services import reaper
 from app.services.reaper import reap_once, run_reaper
@@ -204,6 +205,7 @@ async def test_lifespan_runs_reaper_in_background_and_stops_it(engine, make_prod
     rid = await insert_hold(engine, product["id"], qty=3, expires_in_seconds=-1)
     tasks_before = {t for t in asyncio.all_tasks() if t.get_name() == "reaper"}
 
+    monkeypatch.setattr(main_module, "run_reaper", run_reaper)  # the fixture installed an idle stub
     monkeypatch.setattr(settings, "REAPER_INTERVAL_SECONDS", 0.05)
     async with lifespan(app):
         reaper_tasks = {t for t in asyncio.all_tasks() if t.get_name() == "reaper"} - tasks_before

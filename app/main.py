@@ -20,24 +20,26 @@ logging.getLogger("app").setLevel(logging.INFO)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: open the DB pool and Redis client once, share them via app.state.
-    app.state.engine = create_engine()
+    # Shutdown closes these local references, so anything that reassigns app.state
+    # in the meantime can't make us close the wrong objects (or leak these).
+    engine = create_engine()
     # Short timeouts: Redis is only a cache, so a hung Redis must not stall requests.
-    app.state.redis = redis.from_url(
+    redis_client = redis.from_url(
         settings.REDIS_URL,
         decode_responses=True,
         socket_connect_timeout=1,
         socket_timeout=1,
     )
+    app.state.engine = engine
+    app.state.redis = redis_client
     reaper_task = None
     try:
-        await init_schema(app.state.engine)
-        # Background expiry loop. REAPER_INTERVAL_SECONDS <= 0 disables it (tests do
-        # this and call reap_once() directly instead).
-        if settings.REAPER_INTERVAL_SECONDS > 0:
-            reaper_task = asyncio.create_task(
-                run_reaper(app.state.engine, settings.REAPER_INTERVAL_SECONDS, settings.REAPER_BATCH_SIZE),
-                name="reaper",
-            )
+        await init_schema(engine)
+        # Background expiry loop (BUILDBOOK 7.4).
+        reaper_task = asyncio.create_task(
+            run_reaper(engine, settings.REAPER_INTERVAL_SECONDS, settings.REAPER_BATCH_SIZE),
+            name="reaper",
+        )
         yield
     finally:
         # Shutdown: stop the reaper first (it uses the pool), then close connections.
@@ -45,8 +47,8 @@ async def lifespan(app: FastAPI):
             reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reaper_task
-        await app.state.redis.aclose()
-        await app.state.engine.dispose()
+        await redis_client.aclose()
+        await engine.dispose()
 
 
 app = FastAPI(title="Inventory Reservation Service", lifespan=lifespan)

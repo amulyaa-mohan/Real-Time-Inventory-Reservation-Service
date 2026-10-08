@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Request
@@ -10,13 +11,17 @@ from app.db import check_db, get_engine
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+# A hung Postgres must yield a prompt 503, not a probe that hangs. (Redis already
+# has 1s socket timeouts from the client config.)
+DB_HEALTH_TIMEOUT_SECONDS = 2
+
 
 @router.get("/health")
 async def health(request: Request) -> JSONResponse:
     status = {"db": "ok", "redis": "ok"}
 
     try:
-        await check_db(request.app.state.engine)
+        await asyncio.wait_for(check_db(request.app.state.engine), DB_HEALTH_TIMEOUT_SECONDS)
     except Exception:
         log.exception("health: database check failed")
         status["db"] = "error"

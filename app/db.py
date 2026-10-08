@@ -27,9 +27,17 @@ def _schema_statements() -> list[str]:
     return [stmt.strip() for stmt in "\n".join(lines).split(";") if stmt.strip()]
 
 
+# Arbitrary app-wide constant identifying the "schema init" advisory lock.
+SCHEMA_LOCK_ID = 727_001
+
+
 async def init_schema(engine: AsyncEngine) -> None:
-    """Create tables/indexes if missing. Safe to run on every startup."""
+    """Create tables/indexes if missing. Safe to run on every startup, from many replicas."""
     async with engine.begin() as conn:
+        # CREATE TABLE IF NOT EXISTS is not safe to run concurrently (two sessions can
+        # both pass the check and one fails on pg_type). This transaction-scoped lock
+        # makes replicas that start together take turns; it's released at COMMIT.
+        await conn.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": SCHEMA_LOCK_ID})
         for stmt in _schema_statements():
             await conn.execute(text(stmt))
 
