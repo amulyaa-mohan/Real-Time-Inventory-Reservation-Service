@@ -210,6 +210,10 @@ Run on a 24-thread Windows laptop, Docker Desktop, one uvicorn process:
 | Latency | p50 530 ms · p95 1.1 s · p99 1.4 s · max 2.2 s |
 | `verify.py` | `HELD=50, available=0` → **INVARIANT OK** |
 
+Throughput and latency vary with what else the machine is doing. A later run from a
+fresh clone did 3,802 requests (p50 1.2 s, one `503`). The correctness results don't
+vary: every run sold **exactly 50** with **INVARIANT OK**.
+
 ![Locust charts](docs/locust-charts.png)
 
 **What the numbers show:**
