@@ -64,9 +64,15 @@ def _to_body(reservation: dict) -> dict:
 
 
 async def _replay_from_db(redis: Redis, existing: dict, idem_key: str, req_hash: str) -> dict:
-    """Step 2 hit: verify the body matches, re-populate the Redis cache, return the stored result."""
+    """Step 2 hit: verify the body matches, re-populate the Redis cache, return the original result.
+
+    A replay returns the ORIGINAL response (like the Redis path), not the row's current
+    state: every successful reserve answered status HELD, and the other fields never
+    change. So a retry gets the same body whether or not Redis still had the key, even
+    after a confirm/release/expiry. Current state: GET /reservations/{id}.
+    """
     _check_same_request(existing["request_hash"], req_hash)
-    body = _to_body(existing)
+    body = _to_body({**existing, "status": "HELD"})
     await idempotency.cache_response(redis, idem_key, req_hash, 201, body)
     return body
 

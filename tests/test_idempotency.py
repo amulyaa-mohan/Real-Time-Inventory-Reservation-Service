@@ -204,3 +204,30 @@ async def test_out_of_stock_without_duplicate_is_still_409(client, engine, make_
 
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "OUT_OF_STOCK"
+
+
+@pytest.mark.parametrize("change", ["confirm", "release", "expire"])
+async def test_replay_returns_original_response_via_redis_and_db(client, engine, make_product, change):
+    # A replay answers "what happened to my request?": the original 201 body (HELD),
+    # identical whether it is served from Redis or from the DB, even after the
+    # reservation moved on. The current state is available via GET /reservations/{id}.
+    product = await make_product(total_qty=10)
+    first = await reserve(client, product["id"], 2, "order-1")
+    rid = first.json()["id"]
+    if change == "confirm":
+        assert (await client.post(f"/reservations/{rid}/confirm")).status_code == 200
+    elif change == "release":
+        assert (await client.delete(f"/reservations/{rid}")).status_code == 200
+    else:
+        async with engine.begin() as conn:
+            await conn.execute(text("UPDATE reservations SET status = 'EXPIRED' WHERE id = :id"), {"id": rid})
+
+    via_redis = await reserve(client, product["id"], 2, "order-1")
+    await app.state.redis.delete("idem:order-1")
+    via_db = await reserve(client, product["id"], 2, "order-1")
+
+    assert via_redis.status_code == via_db.status_code == 200
+    assert via_redis.json() == via_db.json() == first.json()
+    assert via_db.json()["status"] == "HELD"
+    current = (await client.get(f"/reservations/{rid}")).json()["status"]
+    assert current == {"confirm": "CONFIRMED", "release": "RELEASED", "expire": "EXPIRED"}[change]
