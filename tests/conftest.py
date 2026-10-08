@@ -1,7 +1,8 @@
 """Shared fixtures.
 
 Tests run against the real Postgres + Redis from docker compose (localhost ports),
-using the same database as the dev API. Every test starts from empty tables.
+using the same database as the dev API. Every test starts from empty tables
+and an empty Redis DB.
 """
 
 import httpx
@@ -18,6 +19,8 @@ async def engine():
     async with lifespan(app):
         async with app.state.engine.begin() as conn:
             await conn.execute(text("TRUNCATE reservations, products RESTART IDENTITY CASCADE"))
+        # Idempotency cache entries would otherwise outlive the truncated rows.
+        await app.state.redis.flushdb()
         yield app.state.engine
 
 

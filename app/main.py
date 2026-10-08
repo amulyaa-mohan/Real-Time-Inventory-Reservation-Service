@@ -13,7 +13,13 @@ from app.routes import health, products, reservations
 async def lifespan(app: FastAPI):
     # Startup: open the DB pool and Redis client once, share them via app.state.
     app.state.engine = create_engine()
-    app.state.redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    # Short timeouts: Redis is only a cache, so a hung Redis must not stall requests.
+    app.state.redis = redis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
     try:
         await init_schema(app.state.engine)
         yield
