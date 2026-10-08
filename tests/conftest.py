@@ -28,6 +28,33 @@ async def client(engine):
         yield c
 
 
+async def stock_snapshot(engine, product_id: int) -> dict:
+    """available, total_qty and the qty currently held/confirmed for one product."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("""
+                    SELECT p.total_qty, p.available, p.version,
+                           COALESCE((SELECT SUM(r.qty) FROM reservations r
+                                      WHERE r.product_id = p.id
+                                        AND r.status IN ('HELD', 'CONFIRMED')), 0) AS reserved
+                      FROM products p
+                     WHERE p.id = :id
+                """),
+                {"id": product_id},
+            )
+        ).mappings().one()
+    return dict(row)
+
+
+async def assert_invariant(engine, product_id: int) -> dict:
+    """BUILDBOOK section 5: available + SUM(qty HELD/CONFIRMED) == total_qty."""
+    snap = await stock_snapshot(engine, product_id)
+    assert snap["available"] >= 0, snap
+    assert snap["available"] + snap["reserved"] == snap["total_qty"], snap
+    return snap
+
+
 @pytest.fixture
 def make_product(client):
     """Create a product through the API and return its JSON."""

@@ -1,11 +1,15 @@
 """Pydantic request/response schemas (API shapes only; tables live in schema.sql)."""
 
 from datetime import datetime
+from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-# Postgres INTEGER is 32-bit; reject larger values with a 422 instead of a DB error.
+# Postgres INTEGER is 32-bit and BIGINT is 64-bit; reject larger values with a 422
+# instead of letting them fail inside the DB driver as a 500.
 PG_INT_MAX = 2**31 - 1
+PG_BIGINT_MAX = 2**63 - 1
 
 
 class ProductCreate(BaseModel):
@@ -22,3 +26,17 @@ class ProductOut(BaseModel):
     available: int
     version: int
     updated_at: datetime
+
+
+class ReservationCreate(BaseModel):
+    product_id: int = Field(ge=1, le=PG_BIGINT_MAX)
+    qty: int = Field(ge=1, le=PG_INT_MAX)
+
+
+class ReservationOut(BaseModel):
+    id: UUID
+    product_id: int
+    qty: int
+    status: Literal["HELD", "CONFIRMED", "RELEASED", "EXPIRED"]
+    expires_at: datetime
+    created_at: datetime

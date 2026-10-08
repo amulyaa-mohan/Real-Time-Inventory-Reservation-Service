@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.db import create_engine, init_schema
 from app.errors import register_error_handlers
-from app.routes import health, products
+from app.routes import health, products, reservations
 
 
 @asynccontextmanager
@@ -27,3 +27,4 @@ app = FastAPI(title="Inventory Reservation Service", lifespan=lifespan)
 register_error_handlers(app)
 app.include_router(health.router)
 app.include_router(products.router)
+app.include_router(reservations.router)
