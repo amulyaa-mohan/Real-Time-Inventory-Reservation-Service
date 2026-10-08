@@ -12,13 +12,16 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from app.config import settings
 from app.main import app, lifespan
 
 
 @pytest.fixture
-async def engine():
+async def engine(monkeypatch):
     # Run the real startup/shutdown (creates the pool, Redis client, schema).
     # ASGITransport does not trigger the lifespan by itself, so we enter it here.
+    # The background reaper is disabled; tests call reap_once() directly.
+    monkeypatch.setattr(settings, "REAPER_INTERVAL_SECONDS", 0)
     async with lifespan(app):
         async with app.state.engine.begin() as conn:
             await conn.execute(text("TRUNCATE reservations, products RESTART IDENTITY CASCADE"))

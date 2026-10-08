@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -8,6 +10,7 @@ from app.config import settings
 from app.db import create_engine, init_schema
 from app.errors import register_error_handlers
 from app.routes import health, products, reservations
+from app.services.reaper import run_reaper
 
 # Libraries log at WARNING+; our own app.* loggers (reaper, retries) also at INFO.
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -25,11 +28,23 @@ async def lifespan(app: FastAPI):
         socket_connect_timeout=1,
         socket_timeout=1,
     )
+    reaper_task = None
     try:
         await init_schema(app.state.engine)
+        # Background expiry loop. REAPER_INTERVAL_SECONDS <= 0 disables it (tests do
+        # this and call reap_once() directly instead).
+        if settings.REAPER_INTERVAL_SECONDS > 0:
+            reaper_task = asyncio.create_task(
+                run_reaper(app.state.engine, settings.REAPER_INTERVAL_SECONDS, settings.REAPER_BATCH_SIZE),
+                name="reaper",
+            )
         yield
     finally:
-        # Shutdown: close connections cleanly.
+        # Shutdown: stop the reaper first (it uses the pool), then close connections.
+        if reaper_task is not None:
+            reaper_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reaper_task
         await app.state.redis.aclose()
         await app.state.engine.dispose()
 

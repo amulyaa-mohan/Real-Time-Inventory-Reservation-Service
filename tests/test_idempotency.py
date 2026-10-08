@@ -131,11 +131,11 @@ class BrokenRedis:
 
 
 async def test_redis_down_still_correct_via_db(client, engine, make_product, caplog, monkeypatch):
-    # monkeypatch is requested last, so the real client is restored before the lifespan closes it.
     product = await make_product(total_qty=10)
-    monkeypatch.setattr(app.state, "redis", BrokenRedis())
 
-    with caplog.at_level(logging.WARNING, logger="app.idempotency"):
+    # Scoped patch: the real client is restored before the lifespan shuts down and closes it.
+    with monkeypatch.context() as m, caplog.at_level(logging.WARNING, logger="app.idempotency"):
+        m.setattr(app.state, "redis", BrokenRedis())
         first = await reserve(client, product["id"], 2, "order-1")
         second = await reserve(client, product["id"], 2, "order-1")
         mismatch = await reserve(client, product["id"], 5, "order-1")
